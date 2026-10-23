@@ -166,7 +166,8 @@ function surface(art, ui = false) {
   S.spriteRot = (s, f, x, y, angle, opts) => {
     if (!s) return
     const data = s.frames[(f | 0) % s.frames.length], pal = opts?.pal || art().pal, flash = opts?.flash, flipY = opts?.flipY, flipX = opts?.flipX
-    const ca = Math.cos(angle), sa = Math.sin(angle), r = Math.ceil(Math.hypot(Math.max(s.ax, s.w - s.ax), Math.max(s.ay, s.h - s.ay))) + 1
+    const k = opts?.scale || 1
+    const ca = Math.cos(angle) / k, sa = Math.sin(angle) / k, r = Math.ceil(Math.hypot(Math.max(s.ax, s.w - s.ax), Math.max(s.ay, s.h - s.ay)) * k) + 1
     const W = S.W, H = S.H, px = S.px
     for (let dy = -r; dy <= r; dy++) {
       const yy = Math.round(y) + dy

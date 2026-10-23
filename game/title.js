@@ -118,7 +118,7 @@ export function createSplash(art) {
     const minY = wide ? subY + 16 : hy + 10, maxEnd = fineTop - 6
     let gap = big ? 15 : 13
     let my = Math.min(wide ? Math.max(minY, Math.round(H * 0.47)) : minY, maxEnd - items.length * gap - dh)
-    if (my < minY) { gap = Math.max(11, Math.floor((maxEnd - minY - dh) / items.length)); my = minY }
+    if (my < minY) { gap = Math.max(10, Math.floor((maxEnd - minY - dh) / items.length)); my = minY }
     const rects = []
     items.forEach((it, i) => {
       const on = i === sel, w = U.textWidth(it.label, 1, true)

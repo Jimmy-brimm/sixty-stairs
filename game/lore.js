@@ -25,6 +25,7 @@ export const LANDS = [
   { name: 'THE SUNSCAR DESERT', lines: ['Sand from a kingdom of tombs. Its kings', 'did not stay buried.'] },
   { name: 'THE ASHEN PEAKS', lines: ['The old dwarves\' forge, now the furnace', 'that keeps the Demon Lord warm.'] },
   { name: 'VORGRATH\'S KEEP', lines: ['Red brick laid by stolen hands.', 'The Demon Lord waits on the sixtieth floor.'] },
+  { name: 'THE ENDLESS TOWER', lines: ['Vorgrath is gone, but his tower still climbs', 'into the dark. Nobody has seen its top.'] },
 ]
 
 // the stones you find on the way: floor -> page
@@ -93,11 +94,28 @@ export const ENDING_NOHIT = [
   'THE UNTOUCHED LANTERN. THANK YOU FOR PLAYING.',
 ]
 
+// the Fallen Knights, one hidden on the fifth floor of each land behind a cracked wall
+export const HIDDEN = [
+  { name: 'SIR CALDER, THE HOLLOW BLADE', fall: 'His visor lifts. "Tell them the caves were not my doing." He is dust before you can answer.' },
+  { name: 'DAME ISOLDE, THE LAST SPEAR', fall: 'She plants her spear in the wheat and kneels. The demon light leaves her eyes.' },
+  { name: 'BRANDT THE AXE-SWORN', fall: 'The roots let go of him at last. He sleeps under the old trees he guarded.' },
+  { name: 'NEPHRA, WHO NEVER MISSED', fall: 'Her last arrow flies straight up, toward a sky she still remembers.' },
+  { name: 'OSWIN OF THE EMBER STAFF', fall: 'The ember in his chest goes out, and his staff cools to plain wood.' },
+  { name: 'AURELIA, THE FIRST LANTERN', fall: 'The first Lantern Knight smiles. "Carry it the rest of the way."' },
+]
+
 export const WEAPONS = ['RUSTED BLADE', 'PLAINSTEEL SWORD', 'THORNWOOD SABER', 'SUNFORGED SCIMITAR', 'MAGMASTEEL BLADE', 'LANTERN BRAND']
 export const ARMORS = ['PADDED TUNIC', 'CHAINMAIL', 'BARKPLATE', 'SANDSCALE MAIL', 'OBSIDIAN PLATE', 'LANTERN AEGIS']
 
 // what changed, newest first: the title's What's New pages (drawn in mixed case)
 export const CHANGELOG = [
+  { v: '4.0', name: 'Beyond the Keep', items: [
+    "Each lord now fights its own way: Gemmaw raises lines of crystal spikes, the Scarecrow King sends his crows from every side, Rootmother's roots creep under the floor, Sandmaw opens quicksand that drags you in, Ignarok leaves burning pools, and Vorgrath rains fire and blinks behind you.",
+    'The lords are tougher, turn angry sooner (below 60% health) and rest less between attacks.',
+    'Hidden rooms: on the fifth floor of every land, one wall is cracked. Break it to find a Fallen Knight, a Lantern Knight from before you, with a rare weapon to win and a page for the lore book.',
+    'Beat Vorgrath to open two new modes on the title: the Endless Tower, grey stone floors that climb forever with a lord every tenth floor; and Wave Mode, an arena that fills wave after wave, with a lord every fifth wave. Your highest floor and best wave are kept.',
+    'Three new music tracks, for the tower and the arena.',
+  ] },
   { v: '3.5.3', name: 'Short Codes', items: [
     'Transfer codes: in Save Files press T to show a save file as a short code, or to type one in. They work in Project 0 too, and on the Claude page and the website.',
     'A code carries the hero, the weapon and armour in hand and the story so far; the bag stays behind.',

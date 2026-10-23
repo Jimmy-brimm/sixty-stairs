@@ -39,16 +39,17 @@ export function drawHud(D, art, run, { top = 3, phone = false, party = null, map
   if (!phone) { U.sprite(S.potion, 0, px + 8, top + 33); U.text('x' + h.potions + ' ' + (keys.potion || 'E'), px + 16, top + 22, h.potions ? C.white : C.dim) }
 
   const land = LANDS[run.li]
-  U.text('FLOOR ' + run.floor, 4, H - 20, C.gold)
-  if (run.diffName && run.diffName !== 'NORMAL') U.text(run.diffName, 4 + U.textWidth('FLOOR ' + run.floor) + 8, H - 20, run.diffName === 'NO HIT' ? C.red : C.dim)
-  U.text(land.name, 4, H - 10, C.dim)
+  const label = run.label || 'FLOOR ' + run.floor
+  U.text(label, 4, H - 20, C.gold)
+  if (run.diffName && run.diffName !== 'NORMAL') U.text(run.diffName, 4 + U.textWidth(label) + 8, H - 20, run.diffName === 'NO HIT' ? C.red : C.dim)
+  U.text(run.placeName || land.name, 4, H - 10, C.dim)
 
   drawMinimap(U, run, top, mapMode)
 
   const b = run.boss
   if (b && !b.dead && run.bossIntro <= 0) {
     const w = Math.min(200, W - 120), x = Math.round(W / 2 - w / 2), y = H - 16
-    U.text(BOSSES[run.li].name, W / 2, y - 10, C.red, { align: 'center' })
+    U.text(run.bossName || BOSSES[run.li].name, W / 2, y - 10, C.red, { align: 'center' })
     U.rect(x, y, w, 6, C.hpBack); U.rect(x, y, Math.ceil(w * b.hp / b.maxHp), 6, b.phase === 2 ? rgba(255, 90, 40) : C.hp); U.frame(x - 1, y - 1, w + 2, 8, C.ink)
   }
   if (party) {
@@ -70,7 +71,7 @@ export function drawHud(D, art, run, { top = 3, phone = false, party = null, map
   if (run.reading) drawPage(U, run.reading[0], run.reading.slice(1), 'SPACE OR TAP TO CLOSE')
   if (run.bossIntro > 0) {
     const k = Math.min(1, run.bossIntro / 0.4, (2.6 - run.bossIntro) / 0.4)
-    if (k > 0.3) { U.rect(0, H / 2 - 18, W, 34, rgba(0, 0, 0, 160)); U.text(BOSSES[run.li].name, W / 2, H / 2 - 10, C.red, { scale: W > 330 ? 2 : 1, align: 'center' }) }
+    if (k > 0.3) { U.rect(0, H / 2 - 18, W, 34, rgba(0, 0, 0, 160)); U.text(run.bossName || BOSSES[run.li].name, W / 2, H / 2 - 10, C.red, { scale: W > 330 ? 2 : 1, align: 'center' }) }
   }
   const bn = run.banner
   if (bn) {
@@ -99,7 +100,7 @@ export function drawMinimap(U, run, top, mode = 0) {
   const dot = mode === 1 ? 4 : 2
   if (run.stairsOpen && F.seen[F.i(F.stairs.x, F.stairs.y)]) U.rect(x0 + Math.floor(F.stairs.x * k) - 1, y0 + Math.floor(F.stairs.y * k) - 1, dot + 1, dot + 1, C.blue)
   if (F.stone && F.seen[F.i(F.stone.x, F.stone.y)]) U.rect(x0 + Math.floor(F.stone.x * k), y0 + Math.floor(F.stone.y * k), dot, dot, rgba(120, 220, 255))
-  if (run.floor > 1) U.rect(x0 + Math.floor(F.start.x * k), y0 + Math.floor(F.start.y * k), dot, dot, rgba(255, 220, 150))
+  if (run.hasUp ?? run.floor > 1) U.rect(x0 + Math.floor(F.start.x * k), y0 + Math.floor(F.start.y * k), dot, dot, rgba(255, 220, 150))
   if (run.waypoint) U.rect(x0 + Math.floor(run.waypoint.x / TILE * k) - 1, y0 + Math.floor(run.waypoint.y / TILE * k) - 1, dot + 1, dot + 1, rgba(110, 200, 255))
   for (const c of F.chests) if (F.seen[F.i(c.x, c.y)]) U.rect(x0 + Math.floor(c.x * k), y0 + Math.floor(c.y * k), dot, dot, rgba(230, 180, 70))
   for (const o of run.others.values()) U.rect(x0 + Math.floor(o.x / TILE * k), y0 + Math.floor(o.y / TILE * k), dot, dot, C.green)

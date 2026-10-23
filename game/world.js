@@ -24,6 +24,10 @@ export const LANDS = [
   { key: 'castle', ambient: 0.36, tint: [1.08, 0.8, 0.8], hazard: 'burn', lantern: 115,
     monsters: ['demon_knight', 'imp_mage', 'hellhound', 'gargoyle'], boss: 'demonlord',
     obstacles: [['pillar', 3], ['brazier', 3], ['statue', 2]] },
+  // the Endless Tower (after the story): grey stone, every land's monsters, a lord every tenth floor in its own land
+  { key: 'tower', ambient: 0.6, tint: [0.92, 0.96, 1.1], hazard: 'block', lantern: 112,
+    monsters: ['skeleton', 'crystal_beetle', 'goblin_archer', 'boar', 'wolf', 'spider', 'mummy', 'cobra', 'fire_imp', 'salamander', 'demon_knight', 'imp_mage', 'hellhound', 'gargoyle'],
+    boss: null, obstacles: [['pillar', 4], ['statue', 2], ['brazier', 2]] },
 ]
 export const GLOWS = { crystal: [80, 200, 255, 70], glowshroom: [110, 150, 255, 52], vent: [255, 130, 40, 64], brazier: [255, 150, 60, 90] }
 
@@ -50,9 +54,9 @@ export function rng(seed) {
 
 // ------------------------------------------------------------------ the floor itself
 class Floor {
-  constructor(w, h, floor) {
+  constructor(w, h, floor, land = landOf(floor), li = landIndex(floor)) {
     this.w = w; this.h = h; this.floor = floor
-    this.land = landOf(floor); this.landIndex = landIndex(floor)
+    this.land = land; this.landIndex = li
     this.tile = new Uint8Array(w * h).fill(WALL)
     this.variant = new Uint8Array(w * h)
     this.ob = new Uint8Array(w * h)        // obstacle: 1 + index into land.obstacles
@@ -159,6 +163,7 @@ function rooms(F, r, count, minS, maxS) {
 }
 
 const SHAPES = {
+  tower(F, r) { SHAPES.castle(F, r) },
   cave(F, r) {
     caves(F, r, 0.46)
     for (let k = 0; k < 3; k++) blob(F, r.range(4, F.w - 4), r.range(4, F.h - 4), r.range(1.5, 3), HAZ, r, FLOOR)
@@ -210,13 +215,16 @@ const SHAPES = {
 }
 
 // ------------------------------------------------------------------ making one floor
-export function makeFloor(floor) {
-  const r = rng(floor * 7919 + 13)
-  const land = landOf(floor)
-  const boss = isBossFloor(floor)
-  const size = 38 + (floor % 10) * 1.2 + landIndex(floor) * 2
+// opts.tower: the Endless Tower's floor n instead (its own seed, the tower's stone, a lord every tenth in its land)
+export function makeFloor(floor, opts = {}) {
+  const tower = opts.tower || 0
+  const r = rng(tower ? 900001 + tower * 7919 : floor * 7919 + 13)
+  const boss = tower ? tower % 10 === 0 : isBossFloor(floor)
+  const li = tower ? (boss ? (tower / 10 - 1) % 6 : 6) : landIndex(floor), land = LANDS[li]
+  const size = tower ? 46 + (tower % 10) * 1.2 : 38 + (floor % 10) * 1.2 + landIndex(floor) * 2
   const w = boss ? 26 : Math.round(size + r.int(6)), h = boss ? 22 : Math.round(size * 0.8 + r.int(5))
-  const F = new Floor(w, h, floor)
+  const F = new Floor(w, h, floor, land, li)
+  F.tower = tower
   if (boss) arena(F, r)
   else SHAPES[land.key](F, r)
   for (let x = 0; x < w; x++) { F.set(x, 0, WALL); F.set(x, h - 1, WALL) }
@@ -304,7 +312,7 @@ export function makeFloor(floor) {
   // chests at the far ends; a lore stone on its floors; monsters away from the start
   const byFar = reach.filter(c => F.tile[c] === FLOOR && dist[c] > 10).sort((a, b) => dist[b] - dist[a])
   const deadEnds = byFar.filter(c => { const x = c % w, y = Math.floor(c / w); let n = 0; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (!F.safe(x + dx, y + dy)) n++; return n >= 2 })
-  const nChest = 1 + r.int(2) + (floor % 10 === 9 ? 1 : 0)
+  const nChest = 1 + r.int(2) + (!tower && floor % 10 === 9 ? 1 : 0)
   const used = new Set([F.i(F.stairs.x, F.stairs.y)])
   const free = c => !used.has(c) && ![...used].some(u => Math.abs(u % w - c % w) + Math.abs(Math.floor(u / w) - Math.floor(c / w)) < 4)
   for (const c of [...deadEnds, ...byFar]) {
@@ -312,21 +320,108 @@ export function makeFloor(floor) {
     if (!free(c)) continue
     used.add(c); F.chests.push({ x: c % w, y: Math.floor(c / w), id: F.chests.length })
   }
-  if (STONES[floor]) {
+  if (!tower && STONES[floor]) {
     const c = byFar.find(c => free(c) && dist[c] < dist[F.i(F.stairs.x, F.stairs.y)] * 0.7) ?? byFar[0]
     used.add(c); F.stone = { x: c % w, y: Math.floor(c / w) }
   }
-  const nMon = Math.round(8 + (floor % 10) * 0.7 + landIndex(floor) * 1.5)
+  const nMon = tower ? Math.round(13 + (tower % 10) * 0.8) : Math.round(8 + (floor % 10) * 0.7 + landIndex(floor) * 1.5)
   const spawnable = reach.filter(c => dist[c] >= 8 && F.tile[c] === FLOOR && !used.has(c))
   for (let k = 0; k < nMon && spawnable.length; k++) {
     const c = spawnable.splice(r.int(spawnable.length), 1)[0]
     // the land's fourth monster shows up from its fourth floor on
-    const kinds = (floor - 1) % 10 < 3 ? land.monsters.slice(0, 3) : land.monsters
+    const kinds = !tower && (floor - 1) % 10 < 3 ? land.monsters.slice(0, 3) : land.monsters
     F.monsters.push({ id: k, kind: r.pick(kinds), x: (c % w) * TILE + 8, y: Math.floor(c / w) * TILE + 8 })
     // a little room around each one
     for (let j = spawnable.length - 1; j >= 0; j--) if (Math.abs(spawnable[j] % w - c % w) + Math.abs(Math.floor(spawnable[j] / w) - Math.floor(c / w)) < 3) spawnable.splice(j, 1)
   }
+  if (!tower && floor % 10 === 5) carveSecret(F, r, dist)
   return F
+}
+
+// a sealed room behind one cracked wall, off the way, for a Fallen Knight: all of it carved out of solid wall, with
+// solid wall all round it, so the cracked wall (F.secret.door) is the only way in
+function carveSecret(F, r, dist) {
+  const { w, h } = F, cands = []
+  for (const [len, half] of [[6, 3], [5, 3], [5, 2], [4, 2]]) {
+    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+      const i = F.i(x, y)
+      if (F.tile[i] !== FLOOR || F.ob[i] || dist[i] < 6) continue
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const door = { x: x + dx, y: y + dy }
+        if (F.t(door.x, door.y) !== WALL) continue
+        let fits = true
+        for (let a = 0; a <= len + 1 && fits; a++) for (let b = -half - 1; b <= half + 1; b++) {
+          if (a === 0 && b === 0) continue
+          const cx = door.x + dx * a + (dy ? b : 0), cy = door.y + dy * a + (dx ? b : 0)
+          if (cx < 1 || cy < 1 || cx >= w - 1 || cy >= h - 1 || F.t(cx, cy) !== WALL) { fits = false; break }
+        }
+        if (fits) cands.push({ door, dx, dy, len, half })
+      }
+    }
+    if (cands.length) break
+  }
+  if (!cands.length) return buildSecret(F, r, dist)
+  const c = cands[r.int(cands.length)]
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1
+  for (let a = 1; a <= c.len; a++) for (let b = -c.half; b <= c.half; b++) {
+    const cx = c.door.x + c.dx * a + (c.dy ? b : 0), cy = c.door.y + c.dy * a + (c.dx ? b : 0)
+    F.set(cx, cy, FLOOR); F.variant[F.i(cx, cy)] = 0
+    x0 = Math.min(x0, cx); y0 = Math.min(y0, cy); x1 = Math.max(x1, cx); y1 = Math.max(y1, cy)
+  }
+  F.secret = { door: c.door, room: { x0, y0, x1, y1 }, boss: { x: ((x0 + x1) / 2) * TILE + 8, y: ((y0 + y1) / 2) * TILE + 8 } }
+}
+
+// open lands (plains, desert, the peaks) have no wall deep enough to carve into: build the room instead, walls and
+// all, over the emptiest corner off the way, then wall in whatever ground that cut off, so the floor stays whole
+function buildSecret(F, r, dist) {
+  const { w, h } = F, RW = 9, RH = 8                     // the room 7 x 6 inside a ring of wall
+  const path = pathCells(F, dist, F.stairs)
+  const keep = new Set([F.i(F.start.x, F.start.y), F.i(F.stairs.x, F.stairs.y), ...F.chests.map(c => F.i(c.x, c.y))])
+  if (F.stone) keep.add(F.i(F.stone.x, F.stone.y))
+  const sites = []
+  for (let y0 = 1; y0 + RH <= h - 1; y0++) for (let x0 = 1; x0 + RW <= w - 1; x0++) {
+    let score = 0, bad = false
+    for (let y = y0; y < y0 + RH && !bad; y++) for (let x = x0; x < x0 + RW; x++) {
+      const i = F.i(x, y)
+      if (keep.has(i) || path.has(i) || (dist[i] >= 0 && dist[i] < 6)) { bad = true; break }
+      if (F.tile[i] === WALL) score += 2; else if (dist[i] < 0) score += 1
+    }
+    if (bad) continue
+    // a door needs reachable ground just outside the middle of a side
+    const doors = []
+    for (let x = x0 + 2; x < x0 + RW - 2; x++) { doors.push([x, y0, x, y0 - 1]); doors.push([x, y0 + RH - 1, x, y0 + RH]) }
+    for (let y = y0 + 2; y < y0 + RH - 2; y++) { doors.push([x0, y, x0 - 1, y]); doors.push([x0 + RW - 1, y, x0 + RW, y]) }
+    const door = doors.find(([, , ox, oy]) => F.in(ox, oy) && dist[F.i(ox, oy)] >= 6 && F.tile[F.i(ox, oy)] === FLOOR)
+    if (!door) continue
+    sites.push({ x0, y0, score, door })
+  }
+  // the best sites first; the first that leaves the door's front, the stairs and every chest reachable is the one
+  sites.sort((a, b) => b.score - a.score)
+  const saved = [F.tile.slice(), F.ob.slice(), F.deco.slice(), F.variant.slice(), F.monsters.slice()]
+  for (const site of sites.slice(0, 16)) {
+    if (placeSecret(F, site, RW, RH)) return
+    F.tile.set(saved[0]); F.ob.set(saved[1]); F.deco.set(saved[2]); F.variant.set(saved[3]); F.monsters = saved[4].slice()
+  }
+}
+function placeSecret(F, site, RW, RH) {
+  const { w, h } = F, { x0, y0, door } = site
+  for (let y = y0; y < y0 + RH; y++) for (let x = x0; x < x0 + RW; x++) {
+    const i = F.i(x, y), ring = x === x0 || y === y0 || x === x0 + RW - 1 || y === y0 + RH - 1
+    F.tile[i] = ring ? WALL : FLOOR; F.ob[i] = 0; F.deco[i] = 0; F.variant[i] = 0
+  }
+  F.monsters = F.monsters.filter(m => { const x = Math.floor(m.x / TILE), y = Math.floor(m.y / TILE); return x < x0 || x >= x0 + RW || y < y0 || y >= y0 + RH })
+  // ground the new walls cut off from the start becomes wall too, and nothing waits there
+  const d = F.distances(F.start.x, F.start.y)
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = F.i(x, y), inRoom = x > x0 && x < x0 + RW - 1 && y > y0 && y < y0 + RH - 1
+    if (!inRoom && d[i] < 0 && F.tile[i] === FLOOR) { F.tile[i] = WALL; F.ob[i] = 0 }
+  }
+  F.monsters = F.monsters.filter(m => d[F.i(Math.floor(m.x / TILE), Math.floor(m.y / TILE))] >= 0)
+  if (d[F.i(door[2], door[3])] < 0 || d[F.i(F.stairs.x, F.stairs.y)] < 0 || F.chests.some(c => d[F.i(c.x, c.y)] < 0)) return false
+  F.dist = F.distances(F.start.x, F.start.y)
+  F.secret = { door: { x: door[0], y: door[1] }, room: { x0: x0 + 1, y0: y0 + 1, x1: x0 + RW - 2, y1: y0 + RH - 2 },
+    boss: { x: (x0 + RW / 2) * TILE, y: (y0 + RH / 2) * TILE } }
+  return true
 }
 
 function pathCells(F, dist, to) {
@@ -341,6 +436,23 @@ function pathCells(F, dist, to) {
   }
   out.add(F.i(x, y))
   return out
+}
+
+// Wave Mode's arena: one wide hall of the tower's stone, pillars in rows, nothing else; the run fills it
+export function makeArena() {
+  const r = rng(424242), w = 34, h = 26
+  const F = new Floor(w, h, 1, LANDS[6], 6)
+  for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) F.set(x, y, FLOOR)
+  for (let i = 0; i < w * h; i++) { const v = r(); F.variant[i] = v < 0.6 ? 0 : v < 0.85 ? 1 : 2 }
+  const pillar = 1 + LANDS[6].obstacles.findIndex(o => o[0] === 'pillar'), brazier = 1 + LANDS[6].obstacles.findIndex(o => o[0] === 'brazier')
+  for (const x of [8, 13, 20, 25]) for (const y of [7, 18]) F.ob[F.i(x, y)] = pillar
+  for (const [x, y] of [[4, 4], [w - 5, 4], [4, h - 5], [w - 5, h - 5]]) { F.ob[F.i(x, y)] = brazier; F.lights.push([x * TILE + 8, y * TILE + 6, 255, 150, 60, 90]) }
+  F.start = { x: w >> 1, y: h >> 1 }
+  F.stairs = { x: w >> 1, y: 3, hidden: true }
+  F.dist = F.distances(F.start.x, F.start.y)
+  for (let i = 0; i < w * h; i++) if (F.tile[i] === FLOOR && !F.ob[i] && r() < 0.05) F.deco[i] = 1 + r.int(3)
+  F.arena = true
+  return F
 }
 
 function arena(F, r) {

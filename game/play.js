@@ -1,11 +1,11 @@
 // One floor of the Sixty Stairs: the knight, the monsters, the loot, the light. Solo, the floor is all yours; in a
 // party the leader runs the monsters and everyone else follows the leader's word (see net.js).
 // World units: a tile is 16; the world layer draws Z pixels per unit: 2 (32-pixel tiles), or 1 on low graphics.
-import { makeFloor, TILE, WALL, HAZ, GLOWS, rng, landIndex } from './world.js'
+import { makeFloor, TILE, FLOOR, WALL, HAZ, GLOWS, rng, landIndex, LANDS as WORLD_LANDS } from './world.js'
 import { makeMonster, stepMonster, stepShots, move, fits, los, MON_KINDS, SHOTS, SHOT_LIGHT } from './actors.js'
 import { makeBoss, stepBoss, bossHittable } from './bosses.js'
 import { C, rgba, makePalette } from './display.js'
-import { STONES, BOSSES } from './lore.js'
+import { STONES, BOSSES, HIDDEN } from './lore.js'
 import { heroStats, xpNeed, rollItem, itemName, RARITY, TIER_METAL, WEAPON_KINDS, POINTS_PER_LEVEL, DIFFICULTY } from './items.js'
 
 export const MAX_POTIONS = 9
@@ -31,15 +31,17 @@ const HAND = { down: [5, -8], up: [-5, -8], side: [3, -8] }
 
 // arrive: 'start' (the floor's top, by the stairs down from above or a waystone) or 'stairs' (up from the floor below)
 // diff: the difficulty's key, or a function giving it (read when a monster is made, and at every hit you take)
-export function createRun({ floor, art, D, hero, sfx, net = null, save, events, arrive = 'start', diff = 'normal' }) {
+// mode: 'story'; 'tower' (world: the tower's floor towerN; floor: how deep its monsters are); 'waves' (world: the arena)
+export function createRun({ floor, art, D, hero, sfx, net = null, save, events, arrive = 'start', diff = 'normal', mode = 'story', world = null, towerN = 0 }) {
   const D_ = () => DIFFICULTY[typeof diff === 'function' ? diff() : diff] || DIFFICULTY.normal
   const harden = (m, boss = false) => {
     const d = D_(), k = d.hp * (boss ? d.boss : 1)
     m.hp = m.maxHp = Math.max(1, Math.round(m.maxHp * k)); if (m.speed) m.speed *= d.speed
     return m
   }
-  const F = makeFloor(floor)
-  const land = F.land, li = landIndex(floor)
+  const F = world || makeFloor(floor)
+  const land = F.land, li = F.landIndex, story = mode === 'story'
+  const lootTier = Math.min(5, li), luckOf = f => Math.min(1, f / 60)
   const rand = rng(floor * 31 + (net ? 7 : 3) + (save?.deaths || 0) * 101)
   const loot = rng((Math.random() * 4294967296) >>> 0)       // chests and drops: new every visit
   let S = art.sprites, Z = 2, q = 1, fx = 2      // sprites, pixels per unit, q = Z / 2, effects (2 all, 1 fewer)
@@ -55,11 +57,60 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     offDown: !up, offUp: up, offWp: true }
   const monsters = F.monsters.map(m => harden(makeMonster(m.kind, floor, m.x, m.y, m.id, rand)))
   let nextId = 1000
+  // ---- Wave Mode: the arena fills, wave after wave; a lord every fifth; a breather between them
+  const ALL_MON = WORLD_LANDS.slice(0, 6).flatMap(l => l.monsters)
+  let wave = 0, waveT = mode === 'waves' ? 2.5 : 0, waveLive = false
+  function spawnWave() {
+    wave++; waveLive = true
+    const deep = Math.min(95, 4 + wave * 3), n = Math.min(26, 4 + wave * 2), lord = wave % 5 === 0
+    const pool = ALL_MON.slice(0, Math.min(ALL_MON.length, 6 + wave * 2))         // later waves bring later lands' beasts
+    const free = []
+    for (let y = 2; y < F.h - 2; y++) for (let x = 2; x < F.w - 2; x++) {
+      const px = x * TILE + 8, py = y * TILE + 8
+      if (!F.solid(x, y) && Math.hypot(px - me.x, py - me.y) > 110) free.push([px, py])
+    }
+    for (let k = 0; k < (lord ? Math.ceil(n / 2) : n) && free.length; k++) {
+      const [x, y] = free.splice(Math.floor(rand() * free.length), 1)[0]
+      const m = harden(makeMonster(pool[Math.floor(rand() * pool.length)], deep, x, y, nextId++, rand)); m.awake = true
+      monsters.push(m); effect('poof', x, y, 0.4)
+    }
+    if (lord) {
+      const L = (wave / 5 - 1) % 6
+      boss = harden(makeBoss(WORLD_LANDS[L].boss, deep, (F.w >> 1) * TILE + 8, 6 * TILE + 8), true)
+      boss.waveLord = true; boss.title = BOSSES[L].name; boss.awake = true; bossIntro = 2.0; sfx('roar', 0.8)
+    }
+    banner = { text: 'WAVE ' + wave + (lord ? ': A LORD COMES' : ''), t: 0, life: 2, color: lord ? C.red : C.gold }
+    events.wave?.(wave)
+  }
+  function stepWaves(dt) {
+    if (mode !== 'waves' || me.dead) return
+    if (waveT > 0) { waveT -= dt; if (waveT <= 0) spawnWave(); return }
+    if (waveLive && monsters.every(m => m.dead) && (!boss || boss.dead)) {
+      waveLive = false; waveT = 3.5
+      heal(Math.round(st.maxHp * 0.25))
+      if (wave % 5 === 0) hero.potions = Math.min(MAX_POTIONS, hero.potions + 1)
+      banner = { text: 'WAVE ' + wave + ' CLEARED', t: 0, life: 2, color: C.green }
+      events.waveCleared?.(wave)
+    }
+  }
   // coming up from below, the lord of this floor is already beaten
-  const boss = F.boss && !up ? harden(makeBoss(F.boss.kind, floor, F.boss.x, F.boss.y), true) : null
+  let boss = F.boss && !up ? harden(makeBoss(F.boss.kind, floor, F.boss.x, F.boss.y), true) : null
+  // the hidden room (story, solo): a cracked wall to break, and a Fallen Knight waiting beyond it
+  const secret = !net && mode === 'story' && !save?.hidden?.includes(li) ? F.secret || null : null
+  let secretOpen = false, secretWoke = false
+  const inSecret = (x, y) => !!secret && x >= secret.room.x0 && x <= secret.room.x1 && y >= secret.room.y0 && y <= secret.room.y1
+  const hidden = (x, y) => !!secret && !secretOpen && inSecret(x, y)          // drawn as solid wall until it is opened
+  const tt = (x, y) => hidden(x, y) ? WALL : F.t(x, y)
+  function crackAt(tx, ty) {
+    if (!secret || secretOpen || tx !== secret.door.x || ty !== secret.door.y) return false
+    secretOpen = true; F.set(tx, ty, FLOOR)
+    burst(tx * TILE + 8, ty * TILE + 8, rgba(200, 184, 168), 18, 70); shake = 0.3; sfx('chest', 0.8)
+    banner = { text: 'A HIDDEN PASSAGE', t: 0, life: 2.4, color: C.gold }
+    return true
+  }
   // a waystone on the first floor of each land, a step or two from the top of the floor
   let wp = null
-  if (floor % 10 === 1) {
+  if (story && floor % 10 === 1) {
     const taken = new Set([...F.chests.map(c => F.i(c.x, c.y)), F.stone ? F.i(F.stone.x, F.stone.y) : -1, F.i(F.stairs.x, F.stairs.y), F.i(F.start.x, F.start.y)])
     for (const want of [2, 3, 1, 4]) {
       for (let i = 0; i < F.w * F.h && !wp; i++) if (F.dist[i] === want && !F.ob[i] && F.tile[i] !== WALL && F.tile[i] !== HAZ && !taken.has(i)) wp = { x: (i % F.w) * TILE + 8, y: Math.floor(i / F.w) * TILE + 8 }
@@ -127,9 +178,10 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     shots.push({ x: x + Math.cos(a) * speed * age, y: y + Math.sin(a) * speed * age, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, dmg, spr: sprite, life: 4 - age })
     if (net && auth()) outbox.shots.push([Math.round(x), Math.round(y), Math.round(a * 100) / 100, speed, dmg, SHOTS.indexOf(sprite)])
   }
-  function slam(x, y, r, dmg, delay) {
-    marks.push({ x, y, r, dmg, t: delay, d0: delay })
-    if (net && auth()) outbox.marks.push([Math.round(x), Math.round(y), r, dmg, delay])
+  // pull: a mark that draws people toward its middle while it waits (Sandmaw's quicksand)
+  function slam(x, y, r, dmg, delay, pull = 0) {
+    marks.push({ x, y, r, dmg, t: delay, d0: delay, pull })
+    if (net && auth()) outbox.marks.push([Math.round(x), Math.round(y), r, dmg, delay, pull])
   }
   function summon(kind, x, y) {
     if (!fits(F, x, y, 6, false)) { x = boss.x; y = boss.y + 16 }
@@ -172,7 +224,7 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     const r = loot()
     if (r < 0.08) drops.push({ kind: 'heart', x: m.x, y: m.y, t: 0 })
     else if (r < 0.11) drops.push({ kind: 'potion', x: m.x, y: m.y, t: 0 })
-    else if (r < 0.14) drops.push({ kind: 'item', item: rollItem(loot, { tier: li, luck: floor / 60 }), x: m.x, y: m.y, t: 0 })
+    else if (r < 0.14) drops.push({ kind: 'item', item: rollItem(loot, { tier: lootTier, luck: luckOf(floor) }), x: m.x, y: m.y, t: 0 })
   }
   function hurtBoss(dmg, crit) {
     if (!boss || !bossHittable(boss)) return
@@ -192,16 +244,25 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     for (const m of monsters) if (!m.dead) killMonster(m, true)
     shots.length = 0; marks.length = 0
     reward(Math.round(80 * (1 + 0.1 * (floor - 1))), boss.x, boss.y)
+    if (boss.hiddenBoss) {
+      // a Fallen Knight's blade, of your kind, epic or better, a tier above the land's
+      const it = rollItem(loot, { kind: hero.weapon?.k || 'sword', tier: Math.min(5, li + 1), luck: 0.9, minRarity: 3 })
+      drops.push({ kind: 'item', item: it, x: boss.x, y: boss.y + 12, t: 0 })
+      hero.hp = st.maxHp; hero.potions = Math.min(MAX_POTIONS, hero.potions + 2)
+      events.hiddenDown?.(li, itemName(it))
+      banner = { text: boss.title + ' IS FREE', t: 0, life: 3.4, color: C.gold, sub: HIDDEN[li].fall }
+      return
+    }
     // the lord's treasure: a weapon of your kind and an armour, of the next tier, rare or better (once; again, one thing)
-    const tier = Math.min(5, li + 1), first = !save?.bosses?.includes(li)
+    const tier = Math.min(5, lootTier + 1), first = !story || !save?.bosses?.includes(li)        // the tower and the arena: always the rich chest
     const got = first ? [rollItem(loot, { kind: hero.weapon?.k || 'sword', tier, luck: 0.6, minRarity: 2 }), rollItem(loot, { kind: 'armor', tier, luck: 0.6, minRarity: 2 })]
-      : [rollItem(loot, { tier: li, luck: 0.5, minRarity: 1 })]
+      : [rollItem(loot, { tier: lootTier, luck: 0.5, minRarity: 1 })]
     for (const it of got) drops.push({ kind: 'item', item: it, x: boss.x + (rand() - 0.5) * 20, y: boss.y + 12, t: 0 })
     hero.hp = st.maxHp
     hero.potions = Math.min(MAX_POTIONS, hero.potions + 2)
-    events.bossDown?.(li, got.map(itemName))
-    stairsOpen = true
-    banner = { text: BOSSES[li].name + ' FALLS', t: 0, life: 3, color: C.gold, sub: BOSSES[li].fall }
+    if (story) events.bossDown?.(li, got.map(itemName)); else events.modeLord?.(li, got.map(itemName))
+    if (mode !== 'waves') stairsOpen = true
+    banner = { text: (boss.title || BOSSES[li].name) + ' FALLS', t: 0, life: 3, color: C.gold, sub: boss.waveLord ? '' : BOSSES[li]?.fall || '' }
   }
   function reward(xp, x, y) {
     xp = Math.round(xp * st.xpMul)
@@ -292,6 +353,7 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
       me.hitIds.add(m.id); hitTarget(m, false, roll(), a)
     }
     if (boss && !me.hitIds.has('boss') && bossHittable(boss) && inReach(boss.x, boss.y - 8, boss.r)) { me.hitIds.add('boss'); hitTarget(boss, true, roll(), a) }
+    if (secret && !secretOpen) for (const f of [0.6, 0.85, 1]) crackAt(Math.floor((ox + Math.cos(a) * k.reach * f) / TILE), Math.floor((oy + Math.sin(a) * k.reach * f) / TILE))
   }
   function stepMyShots(dt) {
     for (let i = myShots.length - 1; i >= 0; i--) {
@@ -309,7 +371,9 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
         }
       }
       s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt
-      let gone = s.life <= 0 || F.blocksShot(Math.floor(s.x / TILE), Math.floor((s.y + 3) / TILE))
+      const stx = Math.floor(s.x / TILE), sty = Math.floor((s.y + 3) / TILE)
+      let gone = s.life <= 0 || F.blocksShot(stx, sty)
+      if (gone && secret && !secretOpen && !s.ghost) crackAt(stx, sty)
       if (!gone && !s.ghost) {
         for (const m of monsters) {
           if (m.dead || s.hit.has(m.id) || Math.hypot(m.x - s.x, m.y - 4 - s.y) > m.r + 3) continue
@@ -334,7 +398,7 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     const x = c.x * TILE + 8, y = c.y * TILE + 8
     const r = loot(), sure = floor % 10 === 9 && c.id === 0
     burst(x, y - 6, rgba(255, 220, 120), 14, 60, true)
-    if (sure || r < 0.6) drops.push({ kind: 'item', item: rollItem(loot, { tier: li, luck: floor / 60 + (sure ? 0.4 : 0), minRarity: sure ? 1 : 0 }), x, y: y + 10, t: 0 })
+    if (sure || r < 0.6) drops.push({ kind: 'item', item: rollItem(loot, { tier: lootTier, luck: Math.min(1, luckOf(floor) + (sure ? 0.4 : 0)), minRarity: sure ? 1 : 0 }), x, y: y + 10, t: 0 })
     else drops.push({ kind: 'potion', x, y: y + 10, t: 0 })
     if (r > 0.8) drops.push({ kind: 'potion', x: x + 8, y: y + 10, t: 0 })
     events.changed?.()
@@ -378,7 +442,7 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
       s2.x += s2.vx * 0.06; s2.y += s2.vy * 0.06
       shots.push(s2)
     }
-    for (const v of s.mk || []) marks.push({ x: v[0], y: v[1], r: v[2], dmg: v[3], t: v[4], d0: v[4] })
+    for (const v of s.mk || []) marks.push({ x: v[0], y: v[1], r: v[2], dmg: v[3], t: v[4], d0: v[4], pull: v[5] || 0 })
     for (const id of s.x || []) {
       if (id === 'boss') { if (boss) { boss.hp = 0; killBoss() } continue }
       const o = byId.get(id); if (o) killMonster(o)
@@ -481,7 +545,7 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
         if (pickUp(d)) { sfx('pickup', 0.6); drops.splice(i, 1) }
       }
       const tx = Math.floor(me.x / TILE), ty = Math.floor(me.y / TILE)
-      const onDown = tx === F.stairs.x && ty === F.stairs.y, onUp = floor > 1 && tx === F.start.x && ty === F.start.y
+      const onDown = tx === F.stairs.x && ty === F.stairs.y, onUp = story && floor > 1 && tx === F.start.x && ty === F.start.y
       const onWp = !!wp && Math.hypot(wp.x - me.x, wp.y - me.y) < 9
       if (!onDown) me.offDown = true
       if (!onUp) me.offUp = true
@@ -494,8 +558,14 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     }
     stepMyShots(dt)
     const px = Math.floor(me.x / TILE), py = Math.floor(me.y / TILE)
-    for (let y = py - 7; y <= py + 7; y++) for (let x = px - 9; x <= px + 9; x++) if (F.in(x, y)) F.seen[F.i(x, y)] = 1
+    for (let y = py - 7; y <= py + 7; y++) for (let x = px - 9; x <= px + 9; x++) if (F.in(x, y) && !hidden(x, y)) F.seen[F.i(x, y)] = 1
+    if (secret && secretOpen && !secretWoke && inSecret(px, py) && !boss) {
+      secretWoke = true
+      boss = harden(makeBoss('fallen' + li, floor, secret.boss.x, secret.boss.y), true)
+      boss.hiddenBoss = true; boss.title = HIDDEN[li].name; boss.awake = true; bossIntro = 2.2; sfx('roar', 0.8)
+    }
 
+    stepWaves(dt)
     if (auth()) {
       flowT -= dt
       if (flowT <= 0) { flowT = 0.2; updateFlow() }
@@ -531,6 +601,10 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     }
     for (let i = marks.length - 1; i >= 0; i--) {
       const m = marks[i]; m.t -= dt
+      if (m.pull && !me.dead && me.dash <= 0) {        // quicksand: drawn in, unless rolling
+        const dx = m.x - me.x, dy = m.y - me.y, dd = Math.hypot(dx, dy)
+        if (dd > 2 && dd < m.r * 2.4) move(F, me, dx / dd * m.pull * dt, dy / dd * m.pull * dt, 'hero', R)
+      }
       if (m.t <= 0) {
         effect('poof', m.x, m.y, 0.35); shake = Math.max(shake, 0.1); burst(m.x, m.y, rgba(255, 140, 90), 12, 80, true)
         if (!me.dead && Math.hypot(m.x - me.x, m.y - me.y) < m.r + R) hurtMe(m.dmg, m.x, m.y)
@@ -666,15 +740,24 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
     const hf = Math.floor(time * 3)
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       if (!F.in(x, y)) continue
-      const i = F.i(x, y), sx = X(x * TILE), sy = Y(y * TILE), t = F.tile[i], T2 = TILE * Z
+      const i = F.i(x, y), sx = X(x * TILE), sy = Y(y * TILE), t = tt(x, y), T2 = TILE * Z
       if (t === WALL) {
-        const faceUp = F.t(x, y + 1) !== WALL
+        const faceUp = tt(x, y + 1) !== WALL
         W.tile(faceUp ? tileSet.face : tileSet.top, (x * 7 + y * 3) & 1, sx, sy)
         if (!faceUp) {
-          if (F.t(x - 1, y) !== WALL) W.rect(sx, sy, Z, T2, EDGE)
-          if (F.t(x + 1, y) !== WALL) W.rect(sx + T2 - Z, sy, Z, T2, EDGE)
-          if (F.t(x, y - 1) !== WALL) W.rect(sx, sy, T2, Z, EDGE)
-        } else if (F.t(x, y - 1) !== WALL) W.rect(sx, sy, T2, Z, EDGE)
+          if (tt(x - 1, y) !== WALL) W.rect(sx, sy, Z, T2, EDGE)
+          if (tt(x + 1, y) !== WALL) W.rect(sx + T2 - Z, sy, Z, T2, EDGE)
+          if (tt(x, y - 1) !== WALL) W.rect(sx, sy, T2, Z, EDGE)
+        } else if (tt(x, y - 1) !== WALL) W.rect(sx, sy, T2, Z, EDGE)
+        if (secret && !secretOpen && x === secret.door.x && y === secret.door.y) {
+          // the cracked wall: a dark split and a few loose chips, the only hint
+          const cr = rgba(18, 10, 14, 230), f = T2 / 32
+          W.line(sx + 9 * f, sy + 4 * f, sx + 15 * f, sy + 13 * f, cr, 0, Math.max(1, Math.round(f)))
+          W.line(sx + 15 * f, sy + 13 * f, sx + 12 * f, sy + 21 * f, cr, 0, Math.max(1, Math.round(f)))
+          W.line(sx + 15 * f, sy + 13 * f, sx + 23 * f, sy + 17 * f, cr, 0, Math.max(1, Math.round(f)))
+          W.line(sx + 12 * f, sy + 21 * f, sx + 17 * f, sy + 28 * f, cr, 0, Math.max(1, Math.round(f)))
+          if (Math.floor(time * 2) % 3 === 0) W.rect(sx + 20 * f, sy + 26 * f, 2 * f, 2 * f, rgba(150, 130, 120, 200))
+        }
       } else if (t === HAZ) {
         W.tile(tileSet.haz, hf + x + y, sx, sy)
         // a darker lip where the hazard meets solid ground
@@ -685,13 +768,20 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
         if (F.t(x, y - 1) === WALL) { W.rect(sx, sy, T2, 6 * q, rgba(0, 0, 0, 70)); W.rect(sx, sy, T2, Math.ceil(3 * q), rgba(0, 0, 0, 50)) }
       }
     }
-    if (stairsOpen) W.sprite(S.stairs, 0, X(F.stairs.x * TILE), Y(F.stairs.y * TILE))
-    if (floor > 1) W.sprite(S.stairs_up, 0, X(F.start.x * TILE), Y(F.start.y * TILE))
+    if (stairsOpen) W.sprite(mode === 'tower' ? S.stairs_up : S.stairs, 0, X(F.stairs.x * TILE), Y(F.stairs.y * TILE))      // the tower climbs
+    if (story && floor > 1) W.sprite(S.stairs_up, 0, X(F.start.x * TILE), Y(F.start.y * TILE))
     if (wp) W.sprite(S.waypoint, Math.floor(time * 2) % 2, X(wp.x), Y(wp.y))
 
     // slams to come: red rings on the ground
     for (const m of marks) {
       const k = 1 - Math.max(0, m.t) / m.d0
+      if (m.pull) {
+        // quicksand: a turning pit of sand, its pull reaching past its edge
+        W.ellipse(X(m.x), Y(m.y), m.r * Z * 1.1, m.r * Z * 0.77, rgba(196, 150, 80, 90))
+        for (let j = 0; j < 3; j++) { const a = time * 3 + j * 2.1; W.ring(X(m.x), Y(m.y), m.r * Z * (0.4 + 0.3 * ((time * 0.8 + j / 3) % 1)), rgba(120, 84, 40, 150), m.r * Z * 0.5) }
+        W.ring(X(m.x), Y(m.y), m.r * Z, rgba(255, 210, 120, 200), m.r * Z * 0.7)
+        continue
+      }
       W.ellipse(X(m.x), Y(m.y), m.r * Z * k, m.r * Z * k * 0.7, rgba(255, 60, 40, 60))
       W.ring(X(m.x), Y(m.y), m.r * Z, rgba(255, 70, 50, 210), m.r * Z * 0.7)
     }
@@ -736,6 +826,19 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
         const flash = m.flash > 0 ? C.white : m.st === 1 && Math.floor(m.t * 12) % 2 ? rgba(255, 140, 140) : 0
         W.sprite(s, Math.floor(m.anim * (m.d.ai === 'flier' ? 10 : 6)), X(m.x), Y(m.y + 3), { flip: m.face < 0, flash })
         if (m.hp < m.maxHp) { const bw = 28 * q, bx = X(m.x) - bw / 2, by = Y(m.y) - (s ? s.ay - 4 * q : 30 * q); W.rect(bx, by, bw, Math.ceil(3 * q), C.hpBack); W.rect(bx, by, Math.ceil(bw * m.hp / m.maxHp), Math.ceil(3 * q), C.hp) }
+        continue
+      }
+      if (it[1] === 3 && it[2].d.knight) {
+        // a Fallen Knight: the hero's own sprites, twice the size, in corrupted colours, with the weapon
+        const b = it[2], kn = b.d.knight, sc = 2
+        const look = { outfit: kn.outfit, head: kn.head, skin: '#7a6a7c', hair: '#1c1420', cloak: '#3c0e1c', trim: '#5a1626' }
+        const pal = palFor(look, 4), fr = Math.floor(b.anim * 6) % 4, flip = b.face < 0
+        const flash = b.flash > 0 ? C.white : (b.st === 'wind' || b.telegraph) && Math.floor(time * 10) % 2 ? rgba(255, 170, 170) : 0
+        W.ellipse(X(b.x), Y(b.y + 3), 14 * q, 6 * q, SHADOW)
+        W.sprite(S['k_' + kn.outfit + '_right'], fr, X(b.x), Y(b.y + 3), { pal, flip, scale: sc * Math.max(1, Math.round(q)), flash })
+        W.sprite(S['h_' + kn.head + '_right'], fr, X(b.x), Y(b.y + 3), { pal, flip, scale: sc * Math.max(1, Math.round(q)), flash })
+        const p = nearest(b.x, b.y), wa = p ? Math.atan2(p.y - b.y, p.x - b.x) : 0
+        W.spriteRot(S['w_' + kn.weapon + '5'], 0, X(b.x + (flip ? -6 : 6)), Y(b.y - 14), wa, { flipY: Math.cos(wa) < 0, scale: sc, flash })
         continue
       }
       if (it[1] === 3) {
@@ -795,7 +898,7 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
       for (const l of F.lights) { const lx = X(l[0]), ly = Y(l[1]); if (lx > -200 && ly > -200 && lx < W.W + 200 && ly < W.H + 200) D.light(lx, ly, l[5] * Z, l[2], l[3], l[4], 1) }
       if (land.hazard === 'burn') for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (F.t(x, y) === HAZ && (x + y) % 2 === 0) D.light(X(x * TILE + 8), Y(y * TILE + 8), 34 * Z, 255, 110, 40, 0.8)
       if (stairsOpen) D.light(X(F.stairs.x * TILE + 8), Y(F.stairs.y * TILE + 8), 30 * Z, 160, 200, 255, 0.6)
-      if (floor > 1) D.light(X(F.start.x * TILE + 8), Y(F.start.y * TILE + 8), 26 * Z, 255, 220, 150, 0.5)
+      if (story && floor > 1) D.light(X(F.start.x * TILE + 8), Y(F.start.y * TILE + 8), 26 * Z, 255, 220, 150, 0.5)
       if (wp) D.light(X(wp.x), Y(wp.y), 40 * Z, 110, 200, 255, 0.9)
       if (F.stone && !stoneRead) D.light(X(F.stone.x * TILE + 8), Y(F.stone.y * TILE + 6), 36 * Z, 120, 220, 255, 0.8)
       if (fx === 2) {
@@ -813,8 +916,10 @@ export function createRun({ floor, art, D, hero, sfx, net = null, save, events, 
   }
 
   return {
-    F, me, hero, monsters, shots, marks, drops, get boss() { return boss }, others, floor, land, li, waypoint: wp, get diffName() { return D_().name },
-    update, draw, onNet, forget, snapshot, restat, setQuality, get stats() { return st },
+    F, me, hero, monsters, shots, marks, drops, get boss() { return boss }, others, floor, land, li, waypoint: wp, get diffName() { return D_().name }, get bossName() { return boss?.title || BOSSES[li]?.name },
+    update, draw, onNet, forget, snapshot, restat, setQuality, get stats() { return st }, mode, towerN, get wave() { return wave },
+    get label() { return mode === 'tower' ? 'TOWER ' + towerN : mode === 'waves' ? 'WAVE ' + Math.max(1, wave) : 'FLOOR ' + floor },
+    get placeName() { return mode === 'waves' ? 'THE ARENA' : null }, hasUp: story && floor > 1,
     get reading() { return reading }, get banner() { return banner }, get bossIntro() { return bossIntro }, get stairsOpen() { return stairsOpen },
     revive() { if (me.dead) { me.dead = false; hero.hp = Math.round(st.maxHp * 0.5); me.inv = 2 } },
   }

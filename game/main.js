@@ -5,9 +5,9 @@ import { createRun, knightPalette, MAX_POTIONS } from './play.js'
 import { createParty } from './net.js'
 import { drawHud, drawMenu, drawPage, drawLandCard, touchButtons, panel, drawMinimap } from './ui.js'
 import { createCreator, drawPauseMenu, drawSheet, drawStats, drawWaystone, drawSettings, DEFAULT_KEYS, keyName } from './menus.js'
-import { checkpointOf, landIndex, TILE } from './world.js'
+import { checkpointOf, landIndex, TILE, makeFloor, makeArena, LANDS as WORLD_LANDS } from './world.js'
 import { newHero, heroStats, makeItem, CLASSES, HEADS, SKINS, HAIRS, CLOTHS, autoSpend, DIFFICULTY, DIFF_ORDER } from './items.js'
-import { TITLE, SUBTITLE, PROLOGUE, LANDS, STONES, BOSSES, ENDING, ENDING_NOHIT, CHANGELOG } from './lore.js'
+import { TITLE, SUBTITLE, PROLOGUE, LANDS, STONES, BOSSES, ENDING, ENDING_NOHIT, CHANGELOG, HIDDEN } from './lore.js'
 import { createSplash } from './title.js'
 import { encodeSlot, decodeSlot, cleanCode } from './transfer.js'
 
@@ -36,7 +36,7 @@ export default async function start(p0) {
   // ---- the save: three slots (each a hero and their progress) and the settings they share (version 3).
   // Version 1 and 2 saves become slot 1.
   // diff: this file's difficulty; nohitSince: the floor from which it has been on No Hit without a break (null: not)
-  const freshSlot = () => ({ hero: null, cp: 1, deepest: 1, lore: [], lands: [], bosses: [], won: false, deaths: 0, map: 0, diff: 'normal', nohitSince: null, wonNoHit: false })
+  const freshSlot = () => ({ hero: null, cp: 1, deepest: 1, lore: [], lands: [], bosses: [], won: false, deaths: 0, map: 0, diff: 'normal', nohitSince: null, wonNoHit: false, hidden: [], tower: 1, towerBest: 0, waveBest: 0 })
   const num = (v, d, lo, hi) => Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : d
   function cleanSlot(s, version) {
     if (!s || typeof s !== 'object') return null
@@ -49,6 +49,8 @@ export default async function start(p0) {
     out.diff = DIFFICULTY[s.diff] ? s.diff : 'normal'
     out.nohitSince = out.diff === 'nohit' && Number.isFinite(s.nohitSince) ? num(s.nohitSince, 1, 1, 60) : null
     out.wonNoHit = !!s.wonNoHit
+    out.tower = num(s.tower, 1, 1, 99999); out.towerBest = num(s.towerBest, 0, 0, 99999); out.waveBest = num(s.waveBest, 0, 0, 99999)
+    out.hidden = Array.isArray(s.hidden) ? s.hidden.filter(n => Number.isInteger(n) && n >= 0 && n < 6) : []      // the Fallen Knights freed
     if (version === 1 && s.hero) {
       // a first-edition knight: same level and checkpoint, the old tiers become items, every level's points to spend
       const o = s.hero, h = newHero('knight')
@@ -144,7 +146,9 @@ export default async function start(p0) {
     if (screen === 'lobby') return 'party'
     if (screen !== 'play') return 'title'
     if (victoryT > 0) return 'ending'
-    if (boss && !boss.dead) return 'lord' + run.li
+    if (boss && !boss.dead) { const k = WORLD_LANDS.findIndex(l => l.boss === boss.kind); return 'lord' + (k >= 0 ? k : Math.min(5, run.li)) }
+    if (run.mode === 'waves') return 'arena'
+    if (run.mode === 'tower') return run.towerN % 10 >= 5 ? 'tower2' : 'tower'
     return run.land.key + ((run.floor - 1) % 10 >= 5 ? '2' : '')
   }
   let track = null
@@ -159,22 +163,29 @@ export default async function start(p0) {
 
   // ---- screens
   let screen = 'title', sel = 0, startCp = save.cp, loreSel = 0, landT = 9, deadT = 0, fadeT = 0, victoryT = 0, note = null
-  let fadeTo = 1, fadeArrive = 'start', wayState = {}, statsState = {}, noHitWin = false
+  let fadeTo = 1, fadeArrive = 'start', fadeMode = 'story', wayState = {}, statsState = {}, noHitWin = false
   const WAYSTONES = [1, 11, 21, 31, 41, 51]
-  const goFloor = (floor, arrive = 'start') => { fadeTo = floor; fadeArrive = arrive; fadeT = 0.01 }
+  const goFloor = (floor, arrive = 'start', mode = 'story') => { fadeTo = floor; fadeArrive = arrive; fadeMode = mode; fadeT = 0.01 }
   let run = null, coop = false, title = null, titlePath = null, titleT = 0, lastCam = { cx: 0, cy: 0, Z: 2 }
   let overlay = null, pauseState = { sel: 0 }, sheetState = {}, settingsState = {}, creator = null, prologue = false
   const events = {
     changed: () => persist(),
     lore: f => { if (!save.lore.includes(f)) { save.lore.push(f); persist() } },
     died: () => { deadT = 0; save.deaths++; persist() },
-    descend: () => { sfx('stairs', 0.7); goFloor(run.floor + 1) },
+    descend: () => { sfx('stairs', 0.7); if (run.mode === 'tower') goFloor(run.towerN + 1, 'start', 'tower'); else goFloor(run.floor + 1) },
+    modeLord: (li, got) => { if (got.length) note = { text: 'THE LORD DROPPED ' + got.join(' AND '), t: 0 }; persist() },
+    waveCleared: n => { if (n > (save.waveBest || 0)) { save.waveBest = n; note = { text: 'A NEW BEST: WAVE ' + n, t: 0 } } persist() },
     ascend: () => { sfx('stairs', 0.7); goFloor(run.floor - 1, 'stairs') },
     waypoint: () => {
       if (coop && !party.isLeader()) { note = { text: 'THE WAYSTONE ANSWERS ONLY THE PARTY LEADER', t: 0 }; return }
       overlay = 'waystone'; wayState = {}; sfx('lore', 0.5)
     },
     loot: () => persist(),
+    hiddenDown: (li, got) => {
+      if (!save.hidden.includes(li)) save.hidden.push(li)
+      note = { text: HIDDEN[li].name + ' LEFT ' + got, t: 0 }
+      sfx('victory', 0.6); persist()
+    },
     bossDown: (li, got) => {
       if (!save.bosses.includes(li)) save.bosses.push(li)
       if (got.length) note = { text: 'THE LORD DROPPED ' + got.join(' AND '), t: 0 }
@@ -184,8 +195,19 @@ export default async function start(p0) {
     },
   }
 
-  function begin(floor, net = null, arrive = 'start') {
+  // mode: 'story' (floor: the story's floor), 'tower' (floor: the tower's floor), 'waves' (floor unused)
+  function begin(floor, net = null, arrive = 'start', mode = 'story') {
     coop = !!net; overlay = null
+    if (mode !== 'story') {
+      // the Endless Tower and Wave Mode: after the story, solo; the tower's monsters are a little past floor sixty and climb
+      const world = mode === 'tower' ? makeFloor(floor, { tower: floor }) : makeArena()
+      run = createRun({ floor: mode === 'tower' ? 55 + floor : 30, art, D, hero, sfx, save, events, diff: () => save.diff, mode, world, towerN: mode === 'tower' ? floor : 0 })
+      run.setQuality(gfxNow)
+      screen = 'play'; fadeT = 0; deadT = 0; landT = mode === 'waves' || floor === 1 ? 0 : 9
+      if (mode === 'tower') { save.tower = floor; save.towerBest = Math.max(save.towerBest || 0, floor) }
+      persist()
+      return
+    }
     if (save.diff === 'nohit' && save.nohitSince == null) save.nohitSince = floor
     run = createRun({ floor, art, D, hero, sfx, net, save, events, arrive, diff: () => save.diff })
     run.setQuality(gfxNow)
@@ -223,7 +245,7 @@ export default async function start(p0) {
   p0.on('leave', p => run?.forget(String(p?.id ?? p)))
   p0.on('reconnect', () => { party.reset(); if (coop) backToTitle() })
   p0.hud(HUD_TEXT)
-  p0.exposeForTests?.({ get run() { return run }, get hero() { return hero }, get screen() { return screen }, events, goFloor, party })      // the Claude page, with ?test only
+  p0.exposeForTests?.({ get run() { return run }, get hero() { return hero }, get screen() { return screen }, events, goFloor, party, begin, get save() { return save } })      // the Claude page, with ?test only
 
   // ---- the frame
   p0.loop((dt) => {
@@ -262,6 +284,7 @@ export default async function start(p0) {
     if (!cps.includes(startCp)) startCp = save.cp
     const items = [
       { key: 'solo', label: hero ? 'Continue' : 'New Game' },
+      ...(hero ? [{ key: 'tower', label: 'Endless Tower', off: !save.won }, { key: 'waves', label: 'Wave Mode', off: !save.won }] : []),
       ...(p0.soloOnly && !p0.coopWhy ? [] : [{ key: 'coop', label: 'Play Together', off: p0.soloOnly }]),      // off: this page cannot reach the others
       { key: 'slots', label: 'Save Files' },
       ...(hero ? [{ key: 'hero', label: 'Your Hero' }] : []),
@@ -273,6 +296,8 @@ export default async function start(p0) {
     const cur = items[sel].key, many = !!hero && cps.length > 1
     const sl = store.slots[store.slot]
     const detail = {
+      tower: save.won ? 'Tower floor ' + (save.tower || 1) + (save.towerBest > 1 ? ', highest ' + save.towerBest : '') : 'Beat Vorgrath to open the tower',
+      waves: save.won ? (save.waveBest ? 'Best: wave ' + save.waveBest : 'Hold the arena, wave after wave') : 'Beat Vorgrath to open the arena',
       solo: hero ? (many ? '< ' : '') + 'Floor ' + startCp + ', ' + nice(LANDS[landIndex(startCp)].name) + (many ? ' >' : '') : 'Make your hero and take the first stair',
       coop: p0.soloOnly ? p0.coopWhy : othersHere() ? 'Go down together: ' + othersHere() + (othersHere() === 1 ? ' other player' : ' other players') + ' here now' : 'Go down together: nobody else has the game open right now',
       slots: 'File ' + (store.slot + 1) + (sl?.hero ? ': level ' + sl.hero.level + ' ' + nice(CLASSES[sl.hero.cls].name) + ', floor ' + sl.deepest + ', ' + nice(DIFFICULTY[sl.diff || 'normal'].name) + (sl.wonNoHit ? ', untouched' : '') : ': empty'),
@@ -309,6 +334,9 @@ export default async function start(p0) {
     sfx('ui', 0.6)
     const key = items[pick].key
     if (key === 'solo') needHero(() => { hero.hp = heroStats(hero).maxHp; begin(startCp) })
+    else if ((key === 'tower' || key === 'waves') && !save.won) sfx('hurt', 0.3)
+    else if (key === 'tower') { hero.hp = heroStats(hero).maxHp; begin(save.tower || 1, null, 'start', 'tower') }
+    else if (key === 'waves') { hero.hp = heroStats(hero).maxHp; begin(1, null, 'start', 'waves') }
     else if (key === 'coop' && p0.soloOnly) sfx('hurt', 0.3)
     else if (key === 'coop') needHero(() => { p0.setClass?.(CLASSES[hero.cls].name); party.join(save.cp, hero.level); screen = 'lobby' })
     else if (key === 'slots') { screen = 'slots'; slotSel = store.slot; erase = -1 }
@@ -389,6 +417,7 @@ export default async function start(p0) {
       if (!save.lands.includes(i)) return
       pages.push({ title: l.name, lines: l.lines })
       for (const f of Object.keys(STONES).map(Number).filter(f => landIndex(f) === i && save.lore.includes(f))) pages.push({ title: STONES[f][0], lines: STONES[f].slice(1) })
+      if (save.hidden?.includes(i)) pages.push({ title: HIDDEN[i].name, lines: ['A Lantern Knight before you, behind a cracked wall on floor ' + (i * 10 + 5) + '.', '', HIDDEN[i].fall] })
       if (save.bosses.includes(i) && BOSSES[i].fall) pages.push({ title: BOSSES[i].name, lines: [BOSSES[i].fall] })
     })
     if (save.won) pages.push({ title: 'THE END', lines: ENDING })
@@ -587,7 +616,7 @@ export default async function start(p0) {
     const input = overlay ? idle : readInput(tap)
     const frozen = overlay && !coop
     if (frozen) { /* the world waits */ }
-    else if (fadeT > 0) { fadeT += dt; if (fadeT > 0.45) { if (!coop) begin(fadeTo, null, fadeArrive); fadeT = 0 } }
+    else if (fadeT > 0) { fadeT += dt; if (fadeT > 0.45) { if (!coop) begin(fadeTo, null, fadeArrive, fadeMode); fadeT = 0 } }
     else if (prologue) { if (was('Space', 'KeyE') || tap) { prologue = false; sfx('ui', 0.5); landT = 0 } }
     else if (victoryT === 0 && !(run.me.dead && !coop)) run.update(dt, overlay ? idle : input)
     else if (run.me.dead && !coop) deadT += dt
@@ -624,8 +653,15 @@ export default async function start(p0) {
     if (!coop && run.me.dead && deadT > 0.8) {
       const cp = run.floor
       U.rect(0, 0, U.W, U.H, rgba(30, 0, 8, Math.min(170, Math.round(deadT * 120))))
-      drawPage(U, 'YOU HAVE FALLEN', ['On floor ' + run.floor + ' of the Sixty Stairs.', '', ...(save.diff === 'nohit' ? ['No Hit: one hit is all it takes.', ''] : []), 'Your lantern relights at the top of this floor. You keep your level and your gear.'], 'SPACE OR TAP: RISE AGAIN')
-      if (deadT > 1.4 && (was('Space', 'KeyE') || tap)) { hero.hp = heroStats(hero).maxHp; hero.potions = Math.max(1, hero.potions); sfx('ui', 0.6); begin(cp) }
+      if (run.mode === 'waves') {
+        // the arena keeps no checkpoint: the run ends, the best stays
+        drawPage(U, 'THE ARENA TAKES YOU', ['You fell in wave ' + run.wave + '.', '', 'Your best: ' + (save.waveBest ? 'wave ' + save.waveBest + ' cleared.' : 'no wave cleared yet.'), 'You keep your level and your gear.'], 'SPACE OR TAP: BACK TO THE TITLE')
+        if (deadT > 1.4 && (was('Space', 'KeyE') || tap)) { hero.hp = heroStats(hero).maxHp; hero.potions = Math.max(1, hero.potions); sfx('ui', 0.6); backToTitle() }
+      } else {
+        const where = run.mode === 'tower' ? 'On floor ' + run.towerN + ' of the Endless Tower.' : 'On floor ' + run.floor + ' of the Sixty Stairs.'
+        drawPage(U, 'YOU HAVE FALLEN', [where, '', ...(save.diff === 'nohit' ? ['No Hit: one hit is all it takes.', ''] : []), 'Your lantern relights at the top of this floor. You keep your level and your gear.'], 'SPACE OR TAP: RISE AGAIN')
+        if (deadT > 1.4 && (was('Space', 'KeyE') || tap)) { hero.hp = heroStats(hero).maxHp; hero.potions = Math.max(1, hero.potions); sfx('ui', 0.6); if (run.mode === 'tower') begin(run.towerN, null, 'start', 'tower'); else begin(cp) }
+      }
     }
     if (victoryT > 0) {
       victoryT += dt
