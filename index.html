@@ -25,6 +25,11 @@
   #help h2 { margin: 0 0 6px; font-size: 14px; color: var(--gold); }
   #help p { margin: 0 0 8px; }
   #help p:last-child { margin: 0; color: var(--dim); }
+  #xferBar { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+  #xferBar button, #xferGo { font: inherit; font-size: 13px; padding: 4px 10px; border: 2px solid var(--line); background: #1a1224; color: var(--ink); cursor: pointer; }
+  #xferBar button:hover, #xferGo:hover { border-color: var(--gold); color: var(--gold); }
+  #xferText { width: 100%; box-sizing: border-box; height: 70px; font: 11px/1.3 ui-monospace, Consolas, monospace; background: #0b0810; color: var(--ink); border: 2px solid var(--line); padding: 6px; resize: vertical; }
+  #xferMsg { display: block; margin-top: 6px; color: var(--gold); }
   #stick { position: fixed; left: max(18px, env(safe-area-inset-left)); bottom: max(18px, env(safe-area-inset-bottom));
     width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.18); background: rgba(20, 14, 28, 0.35);
     touch-action: none; display: grid; place-items: center; }
@@ -45,6 +50,8 @@
     <p id="helpText"></p>
     <p id="coopText"></p>
     <p id="saveText"></p>
+    <div id="xferBar"><button id="saveOut">Copy my save</button><button id="saveIn">Load a save</button></div>
+    <div id="xfer" hidden><textarea id="xferText" spellcheck="false" aria-label="Save code"></textarea><button id="xferGo" hidden>Load it</button><span id="xferMsg"></span></div>
   </div>
 </div>
 <div class="veil" id="veil">
@@ -85,6 +92,26 @@
       ? 'Your three save files are kept with your Claude account (and in this browser). '
       : 'Your three save files are kept in this browser. ')
 
+    // moving a save: Copy shows the code (and copies it); Load takes one, asks once more, then reloads
+    const xfer = $('xfer'), xt = $('xferText'), xm = $('xferMsg'), go = $('xferGo')
+    let armed = false
+    $('saveOut').onclick = async () => {
+      const code = p0.exportSave()
+      xfer.hidden = false; go.hidden = true; armed = false
+      if (!code) { xt.value = ''; xm.textContent = 'There is no save here yet.'; return }
+      xt.value = code; xt.select()
+      let copied = false
+      try { await navigator.clipboard.writeText(code); copied = true } catch {}
+      xm.textContent = (copied ? 'Copied. ' : 'Select it all and copy it. ') + 'On the other page, press ?, then Load a save, and paste it there.'
+    }
+    $('saveIn').onclick = () => { xfer.hidden = false; go.hidden = false; armed = false; xt.value = ''; xm.textContent = 'Paste your save code, then press Load it.'; xt.focus() }
+    go.onclick = async () => {
+      if (!armed) { armed = true; xm.textContent = 'This replaces all three save files on this page. Press Load it again to go ahead.'; return }
+      const err = await p0.importSave(xt.value)
+      if (err) { armed = false; xm.textContent = err; return }
+      xm.textContent = 'Loaded. Starting again with your save...'
+      setTimeout(() => location.reload(), 600)
+    }
     coopLine = () => (p0.coop ? 'Co-op is connected: ' + Math.max(0, p0.room.players.length - 1) + ' other player(s) have the game open now. Pick Play Together.' : 'Co-op: ' + p0.coopWhy + '.')
       + (p0.party ? ' Room: ' + p0.party + '. For a private party, add ?party=yourname to the address and share it.' : '')
     // the loading screen fades out over the game's own fade up from black

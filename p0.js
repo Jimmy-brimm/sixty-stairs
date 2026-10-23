@@ -243,6 +243,29 @@ export async function createP0({ canvas, stick, base = '', saveKey = 'save' }) {
     if (!timer && !writing) timer = setTimeout(flush, 1500)
   }
   addEventListener('visibilitychange', () => { if (document.hidden) flush() })
+
+  // ---- moving a save between the Claude page and the website: a text code holding all three save files
+  const CODE = 'SIXTY1:'
+  p0.exportSave = () => {
+    const data = readLocal() || p0.saved
+    if (!data || !data.v) return null
+    const json = JSON.stringify({ ...data, _at: undefined })
+    return CODE + btoa(unescape(encodeURIComponent(json)))
+  }
+  // -> null when it worked, else what is wrong; the page reloads to load it
+  p0.importSave = async text => {
+    let data
+    try {
+      const t = String(text || '').trim()
+      if (!t.startsWith(CODE)) return 'That is not a Sixty Stairs save code.'
+      data = JSON.parse(decodeURIComponent(escape(atob(t.slice(CODE.length).replace(/\s+/g, '')))))
+    } catch { return 'That code is damaged: copy it again, all of it.' }
+    if (!data || data.v !== 3 || !Array.isArray(data.slots)) return 'That code is not a save this game can read.'
+    const copy = { ...data, _at: Date.now() }
+    writeLocal(copy)
+    if (doc) { clearTimeout(timer); timer = 0; pending = null; try { await within(doc.set({ json: JSON.stringify(copy), at: copy._at }), 5000) } catch {} }
+    return null
+  }
   addEventListener('pagehide', () => flush())
 
   // ---- the frame

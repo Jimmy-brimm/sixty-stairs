@@ -98,6 +98,9 @@ export const ARMORS = ['PADDED TUNIC', 'CHAINMAIL', 'BARKPLATE', 'SANDSCALE MAIL
 
 // what changed, newest first: the title's What's New pages (drawn in mixed case)
 export const CHANGELOG = [
+  { v: '3.5.2', name: 'Carried Lanterns', items: [
+    'Move your save between the Claude page and the website: press ?, then Copy my save on one, and Load a save on the other.',
+  ] },
   { v: '3.5.1', name: 'Open Doors', items: [
     'Play Together on the Claude page no longer gives up when the connection is slow: it lights up as soon as the others can be reached.',
     'Where it cannot connect, the title says why, and how many others have the game open when it can.',
