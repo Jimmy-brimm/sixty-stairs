@@ -9,6 +9,7 @@ import { checkpointOf, landIndex, TILE } from './world.js'
 import { newHero, heroStats, makeItem, CLASSES, HEADS, SKINS, HAIRS, CLOTHS, autoSpend, DIFFICULTY, DIFF_ORDER } from './items.js'
 import { TITLE, SUBTITLE, PROLOGUE, LANDS, STONES, BOSSES, ENDING, ENDING_NOHIT, CHANGELOG } from './lore.js'
 import { createSplash } from './title.js'
+import { encodeSlot, decodeSlot, cleanCode } from './transfer.js'
 
 const HUD_TEXT = 'W A S D move · mouse aims · click or Space strikes · Shift roll · E potion · C stats · I gear · M map · P pause\n' +
   'Phone: stick moves, tap to strike. Keys can be changed in Settings.'
@@ -234,6 +235,7 @@ export default async function start(p0) {
     else if (screen === 'creator') { drawBackdrop(dt); creator(D, dt, menuInput(tap), sfx) }
     else if (screen === 'lore') loreScreen(dt, tap)
     else if (screen === 'news') newsScreen(dt, tap)
+    else if (screen === 'transfer') transferScreen(dt, tap)
     else if (screen === 'lobby') lobbyScreen(dt, tap)
     else if (screen === 'slots') slotsScreen(dt, tap)
     else if (screen === 'settings') { drawBackdrop(dt); if (drawSettings(D, K, settingsState, menuInput(tap), sfx, settingsOpts())) screen = 'title' }
@@ -348,7 +350,7 @@ export default async function start(p0) {
       if (i === store.slot) U.text('IN USE', r.x + r.w - 6, r.y + 15, C.gold, { align: 'right' })
       if (inside(tap, r)) { if (slotSel === i || !store.slots[i]) pick = i; slotSel = i }
     }
-    U.text('SPACE: CHOOSE   X: ERASE   Q: BACK', W / 2, py + ph - 12, C.dim, { align: 'center' })
+    U.text('SPACE: CHOOSE   X: ERASE   T: TRANSFER CODE   Q: BACK', W / 2, py + ph - 12, C.dim, { align: 'center' })
     if (inp.up) { slotSel = (slotSel + 2) % 3; erase = -1; sfx('uimove', 0.5) }
     if (inp.down) { slotSel = (slotSel + 1) % 3; erase = -1; sfx('uimove', 0.5) }
     if (inp.confirm) pick = slotSel
@@ -358,6 +360,8 @@ export default async function start(p0) {
         if (slotSel === store.slot) useSlot(slotSel); else persist()
       } else { erase = slotSel; sfx('ui', 0.5) }
     }
+    // the transfer code: by T, or a tap on the line that says so
+    if (was('KeyT') || (tap && tap.y > py + ph - 16 && inside(tap, { x: px, y: py, w: pw, h: ph }))) { screen = 'transfer'; xfer = { mode: 'menu', sel: 0, code: '', msg: '' }; sfx('ui', 0.5); return }
     if (inp.back) { screen = 'title'; sfx('ui', 0.5); return }
     if (pick < 0) return
     sfx('ui', 0.6); useSlot(pick)
@@ -453,6 +457,85 @@ export default async function start(p0) {
       else { screen = 'title'; sfx('ui', 0.5) }
     }
     if (inp.back || inp.confirm) { screen = 'title'; sfx('ui', 0.5) }
+  }
+
+  // ---- the transfer code: one save file as a short code to type in elsewhere (Project 0 has no clipboard)
+  let xfer = { mode: 'menu', sel: 0, code: '', msg: '' }
+  const keyChar = code => /^Key[A-Z]$/.test(code) ? code.slice(3) : /^(Digit|Numpad)[0-9]$/.test(code) ? code.slice(-1) : null
+  function transferScreen(dt, tap) {
+    drawBackdrop(dt)
+    const U = D.ui, W = U.W, H = U.H, sl = store.slots[store.slot]
+    const pw = Math.min(W - 8, 320), ph = Math.min(H - 8, 168), px = Math.round(W / 2 - pw / 2), py = Math.round(H / 2 - ph / 2)
+    panel(U, px, py, pw, ph)
+    U.text('TRANSFER CODE: FILE ' + (store.slot + 1), W / 2, py + 7, C.gold, { align: 'center' })
+    const body = (lines, y, c = C.white) => U.wrap(lines, pw - 16).forEach((l, i) => U.text(l, W / 2, y + i * 9, c, { align: 'center' }))
+    // the code in groups, large where there is room
+    const drawCode = (text, y, cursor) => {
+      const groups = text.match(/.{1,5}/g) || [], big = pw >= 260, per = big ? 3 : 4, sc = big ? 2 : 1
+      const rows = Math.max(1, Math.ceil((groups.length + (cursor ? 1 : 0)) / per))
+      for (let r = 0; r < rows; r++) U.text(groups.slice(r * per, r * per + per).join(' '), W / 2, y + r * (sc * 9 + 3), C.gold, { align: 'center', scale: sc })
+      return y + rows * (sc * 9 + 3)
+    }
+    if (xfer.mode === 'menu') {
+      body('A CODE CARRIES ONE SAVE FILE BETWEEN PROJECT 0, THE CLAUDE PAGE AND THE WEBSITE: THE HERO, THE GEAR IN HAND AND THE STORY SO FAR. THE BAG STAYS BEHIND.', py + 22, C.dim)
+      const items = [{ k: 'show', l: 'SHOW THIS FILE\'S CODE' }, { k: 'enter', l: 'TYPE IN A CODE' }, { k: 'back', l: 'BACK' }]
+      const inp = menuInput(tap)
+      let pick = null
+      items.forEach((it, i) => {
+        const y = py + 72 + i * 16, r = { x: px + 30, y: y - 4, w: pw - 60, h: 14 }
+        if (inside(inp.mouse, r)) xfer.sel = i
+        if (xfer.sel === i) U.rect(r.x, r.y, r.w, r.h, rgba(255, 206, 70, 50))
+        U.text(it.l, W / 2, y, xfer.sel === i ? C.gold : C.white, { align: 'center' })
+        if (inside(tap, r)) pick = it.k
+      })
+      if (inp.up) { xfer.sel = (xfer.sel + 2) % 3; sfx('uimove', 0.5) }
+      if (inp.down) { xfer.sel = (xfer.sel + 1) % 3; sfx('uimove', 0.5) }
+      if (inp.confirm) pick = items[xfer.sel].k
+      if (inp.back || pick === 'back') { screen = 'slots'; sfx('ui', 0.5); return }
+      if (pick === 'show') { xfer.mode = 'show'; sfx('ui', 0.6) }
+      if (pick === 'enter') { xfer.mode = 'enter'; xfer.code = ''; xfer.msg = ''; sfx('ui', 0.6) }
+      return
+    }
+    if (xfer.mode === 'show') {
+      const code = encodeSlot(sl)
+      if (!code) body('THIS FILE IS EMPTY: NOTHING TO CARRY.', py + 50)
+      else {
+        const end = drawCode(code.replace(/-/g, ''), py + 26)
+        body('ON THE OTHER PAGE: SAVE FILES, T, TYPE IN A CODE. LETTERS AND NUMBERS ONLY; NO I, L, O OR U.', end + 6, C.dim)
+      }
+      U.text('SPACE OR Q: BACK', W / 2, py + ph - 12, C.dim, { align: 'center' })
+      const inp = menuInput(tap)
+      if (inp.confirm || inp.back || tap) { xfer.mode = 'menu'; sfx('ui', 0.5) }
+      return
+    }
+    if (xfer.mode === 'enter') {
+      // letters and numbers from the keyboard (Q is a letter here); Backspace takes one back, Space reads it
+      const ch = keyChar(lastKey)
+      if (ch && xfer.code.length < 70) { xfer.code = cleanCode(xfer.code + ch); xfer.msg = ''; sfx('uimove', 0.3) }
+      if (was('Backspace', 'Delete')) { if (!xfer.code) { xfer.mode = 'menu'; sfx('ui', 0.5); return } xfer.code = xfer.code.slice(0, -1) }
+      const end = drawCode(xfer.code + (Math.floor(titleT * 3) % 2 ? '_' : ' '), py + 26, true)
+      if (xfer.msg) body(xfer.msg, end + 6, C.red)
+      else body(phone() ? 'TYPING NEEDS A KEYBOARD.' : 'TYPE THE CODE. BACKSPACE: UNDO (ON AN EMPTY CODE, BACK). SPACE: READ IT.', end + 6, C.dim)
+      titleT += dt
+      if (was('Space') || (tap && tap.y > py + ph - 18)) {
+        const got = decodeSlot(xfer.code)
+        if (got.error) { xfer.msg = got.error; sfx('hurt', 0.4) }
+        else { const s2 = cleanSlot(got.slot, 2); if (s2) { xfer.slot = s2; xfer.mode = 'confirm'; sfx('ui', 0.6) } else { xfer.msg = 'THAT CODE HOLDS NO HERO'; sfx('hurt', 0.4) } }
+      }
+      U.text('SPACE: READ THE CODE', W / 2, py + ph - 12, C.dim, { align: 'center' })
+      return
+    }
+    // confirm: the code is good; this file becomes what it holds
+    const h = xfer.slot.hero
+    body('THE CODE HOLDS: LEVEL ' + h.level + ' ' + CLASSES[h.cls].name + ', DEEPEST FLOOR ' + xfer.slot.deepest + ', ' + DIFFICULTY[xfer.slot.diff].name + '.', py + 34)
+    body(sl?.hero ? 'IT REPLACES FILE ' + (store.slot + 1) + ' (LEVEL ' + sl.hero.level + ' ' + CLASSES[sl.hero.cls].name + ').' : 'IT GOES INTO FILE ' + (store.slot + 1) + ', NOW EMPTY.', py + 62, sl?.hero ? C.red : C.dim)
+    U.text('SPACE: LOAD IT   Q: NO', W / 2, py + ph - 12, C.dim, { align: 'center' })
+    const inp = menuInput(tap)
+    if (inp.confirm || (tap && tap.x < W / 2)) {
+      store.slots[store.slot] = xfer.slot; useSlot(store.slot)
+      note = { text: 'FILE ' + (store.slot + 1) + ' LOADED FROM ITS CODE', t: 0 }
+      screen = 'title'; sel = 0; sfx('level', 0.6); splash.restart()
+    } else if (inp.back || tap) { xfer.mode = 'enter'; sfx('ui', 0.5) }
   }
 
   // ---- the co-op lobby

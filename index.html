@@ -103,8 +103,10 @@
       let copied = false
       try { await navigator.clipboard.writeText(code); copied = true } catch {}
       xm.textContent = (copied ? 'Copied. ' : 'Select it all and copy it. ') + 'On the other page, press ?, then Load a save, and paste it there.'
+      const short = await p0.exportShort()
+      if (short) xm.textContent += ' For Project 0, type this code in Save Files (T, Type in a code): ' + short + ' (the file in use; the bag stays behind).'
     }
-    $('saveIn').onclick = () => { xfer.hidden = false; go.hidden = false; armed = false; xt.value = ''; xm.textContent = 'Paste your save code, then press Load it.'; xt.focus() }
+    $('saveIn').onclick = () => { xfer.hidden = false; go.hidden = false; armed = false; xt.value = ''; xm.textContent = 'Paste your save code, or type a transfer code from Project 0, then press Load it.'; xt.focus() }
     go.onclick = async () => {
       if (!armed) { armed = true; xm.textContent = 'This replaces all three save files on this page. Press Load it again to go ahead.'; return }
       const err = await p0.importSave(xt.value)

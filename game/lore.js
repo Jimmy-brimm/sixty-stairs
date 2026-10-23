@@ -98,6 +98,10 @@ export const ARMORS = ['PADDED TUNIC', 'CHAINMAIL', 'BARKPLATE', 'SANDSCALE MAIL
 
 // what changed, newest first: the title's What's New pages (drawn in mixed case)
 export const CHANGELOG = [
+  { v: '3.5.3', name: 'Short Codes', items: [
+    'Transfer codes: in Save Files press T to show a save file as a short code, or to type one in. They work in Project 0 too, and on the Claude page and the website.',
+    'A code carries the hero, the weapon and armour in hand and the story so far; the bag stays behind.',
+  ] },
   { v: '3.5.2', name: 'Carried Lanterns', items: [
     'Move your save between the Claude page and the website: press ?, then Copy my save on one, and Load a save on the other.',
   ] },

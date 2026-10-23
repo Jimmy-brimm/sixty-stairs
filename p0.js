@@ -246,6 +246,12 @@ export async function createP0({ canvas, stick, base = '', saveKey = 'save' }) {
 
   // ---- moving a save between the Claude page and the website: a text code holding all three save files
   const CODE = 'SIXTY1:'
+  // the short code of the file in use, for Project 0 (typed by hand)
+  p0.exportShort = async () => {
+    const data = readLocal() || p0.saved
+    const sl = data?.slots?.[data.slot || 0]
+    return sl?.hero ? (await import('./' + base + 'transfer.js')).encodeSlot(sl) : null
+  }
   p0.exportSave = () => {
     const data = readLocal() || p0.saved
     if (!data || !data.v) return null
@@ -257,7 +263,15 @@ export async function createP0({ canvas, stick, base = '', saveKey = 'save' }) {
     let data
     try {
       const t = String(text || '').trim()
-      if (!t.startsWith(CODE)) return 'That is not a Sixty Stairs save code.'
+      if (!t.startsWith(CODE)) {
+        // the short code (from Project 0, or typed): one save file, into the file in use here
+        const got = (await import('./' + base + 'transfer.js')).decodeSlot(t)
+        if (got.error) return /^[0-9a-z\s-]+$/i.test(t) ? 'That transfer code does not read: ' + got.error.toLowerCase() + '.' : 'That is not a Sixty Stairs save code.'
+        const store = readLocal() || { v: 3, slot: 0, slots: [null, null, null] }
+        store.slots = [0, 1, 2].map(i => store.slots?.[i] || null)
+        store.slots[store.slot || 0] = got.slot
+        data = store
+      } else
       data = JSON.parse(decodeURIComponent(escape(atob(t.slice(CODE.length).replace(/\s+/g, '')))))
     } catch { return 'That code is damaged: copy it again, all of it.' }
     if (!data || data.v !== 3 || !Array.isArray(data.slots)) return 'That code is not a save this game can read.'
